@@ -76,7 +76,9 @@ def coadd_maps(splits):
     coadd = (s0 + s1 + s2 + s3)/4
     return coadd
     
-def clean_maps(k, split, split_number, fn, sdir, cleanmap):
+#def clean_maps(k, split, split_number, fn, sdir, cleanmap):
+#def clean_maps(k, split, fn, sdir):
+def clean_maps(k, split, split_number, fn, sdir):
     """ Generate the residual amplitudes in each observation split. 
 
     Args:
@@ -90,34 +92,29 @@ def clean_maps(k, split, split_number, fn, sdir, cleanmap):
       Saves the mixing matrix (Sbar) and Q matrix.
       Saves the residual amplitude maps (filled maps)
     """
-    #testmap = coadd_maps(splits) #[N_freq, N_pix]
-    print(cleanmap)
-    testmap = hp.read_map(cleanmap, field=np.arange(12), verbose=False)
+    #print(cleanmap)
+    #testmap = hp.read_map(cleanmap, field=np.arange(12), verbose=False)
+    testmap = coadd_maps(splits) #[N_freq, N_pix]
     Qs = testmap[::2, sat_mask>0]
     Us = testmap[1::2, sat_mask>0]
     skymaps = np.array([np.transpose(Qs), np.transpose(Us)]) #[N_pol,N_pix,N_freq]
-    print(skymaps.shape)
-    print(skymaps)
 
     # Noise covariance matrix, [N_freq, N_freq]
-    print(fn)
     Qn, Un, noise = get_noise(fn) 
     Qn_sigmas, Qninv_sigmas = noivar(Qn) #get inverse variance of noise
-    print("HIII")
-    print(Qn_sigmas)
-    print(Qninv_sigmas)
-    Qninv_sigmas[:] = 1.
+    #Qninv_sigmas[:] = 1.
     Ninv = np.diag(Qninv_sigmas) #get diagonal matrix
 
     nside = 256
     nhits=hp.ud_grade(hp.read_map("./data/norm_nHits_SA_35FOV.fits", verbose=False), nside_out=nside)
-    ii = np.ones((2, hp.nside2npix(nside)))
+    nhits[nhits < 1E-3] = 1E-3
+    nhits = nhits[sat_mask > 0]
+    #nhits[:]=1
+    ii = np.ones((2, len(nhits)))
     
-    p = (np.array([ii * nhits * sig for sig in Qninv_sigmas]))
-    p = p[:, :, sat_mask>0] #nfreq, npol, npix
-    Ninv_sp = np.transpose(p, axes=[1,2,0])
-    print(Ninv_sp.shape)
-    print('should be npol, npix, nfreq')
+    p = (np.array([ii / (nhits * sig) for sig in Qninv_sigmas]))
+    Ninv_sp = np.transpose(p, axes=[1,2,0]) #npol, npix, nfreq
+    #print(Ninv_sp)
 
     nu_ref_sync_p=23.
     beta_sync_fid=-3.
@@ -146,7 +143,7 @@ def clean_maps(k, split, split_number, fn, sdir, cleanmap):
     bps=np.array([{'nu':np.array([n-0.5,n+0.5]),'bps':np.array([1])} for n in nus])
     instrument=ins.InstrumentModel(bps)
     ml=mpl.MapLike({'data': skymaps, #coadded
-                    'noisevar': np.ones_like(skymaps), #Ninv_sp, 
+                    'noisevar': Ninv_sp, 
                     'fixed_pars':fixed_pars,
                     'var_pars':var_pars,
                     'var_prior_mean':var_prior_mean,
@@ -193,13 +190,15 @@ def clean_maps(k, split, split_number, fn, sdir, cleanmap):
     filled_maps[:, sat_mask>0] = reducedmaps
 
     # Save the results for each split
-    np.savez(f'{sdir}{sname}_hybrid_params_{k}_split%i'%split_number, params=rdict['params_ML'], Sbar=Sbar, Q=Q)
+    #np.savez(f'{sdir}{sname}_hybrid_params_{k}_split%i'%split_number, params=rdict['params_ML'], Sbar=Sbar, Q=Q)
+    #hp.write_map(f'{sdir}{sname}_residualmaps_{k}_split%i.fits'%split_number, filled_maps, overwrite=True)
+    np.savez(f'{sdir}{sname}_hybrid_params_{k}', params=rdict['params_ML'], Sbar=Sbar, Q=Q)
     hp.write_map(f'{sdir}{sname}_residualmaps_{k}_split%i.fits'%split_number, filled_maps, overwrite=True)
     return
 
 # repeating BFore 4 times 1 for each split but params are the same for all splits
 # only do one results save residuals and then apply to all the splits
-stds = 1
+stds = 4
 for std in range(stds):
     ddir = f'sim_ns256_stdd0.{std}_stds0.{std}_gdm3.0_gsm3.0_fullsky_E_B_nu0d353_nu0s23_cmb_dust_sync_Ad28.0_As1.6_ad0.16_as0.93/'
     sdir = f'./data/sim0{std}/'
@@ -209,11 +208,12 @@ for std in range(stds):
     for k, fn in enumerate(fnames[:nsims]):
         splits = glob.glob(f'{fn}obs_split*of4.fits.gz')
         splits.sort()
-        clnmp = f'{fn}maps_sky_signal.fits'
+        #clean_maps(str(k).zfill(stds), splits[0], fn, sdir)
+        #clnmp = f'{fn}maps_sky_signal.fits'
         for s, sn in enumerate(splits):
-            clean_maps(str(k).zfill(stds), sn, s, fn, sdir, clnmp)
-            exit()
-            print(s, sn)
+            #clean_maps(str(k).zfill(stds), sn, s, fn, sdir, clnmp)
+            #exit()
+            #print(s, sn)
             clean_maps(str(k).zfill(stds), sn, s, fn, sdir)
 
 
