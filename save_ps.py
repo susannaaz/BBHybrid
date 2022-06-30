@@ -9,7 +9,7 @@ import healpy as hp
 import pymaster as nmt
 import glob
 
-residuals = False
+residuals = True
 masked = True
 #nsims = 21
 nsims = 1
@@ -54,12 +54,22 @@ for ib,n in enumerate(n_bpw):
 bpw_freq_noi_re = bpw_freq_noi.reshape([nfreqs*npol, nfreqs*npol, nbands])
 
 def saveps(sk):
-    prefix_out = f'data/sim0{sk}/'
+    #prefix_out = f'data/sim0{sk}/'
+    #prefix_out = f'data/gaussian/sim0{sk}/'
+    #prefix_out = f'data/testnorm_minimizer_sim0{sk}_noiseless/'
+    #prefix_out = f'data/testnorm_minimizer_sim0{sk}_noise_nonoisevar/'
+    #prefix_out = f'data/testnorm_fisher_sim0{sk}_noise_nonoisevar/'
+    #prefix_out = f'data/testnorm_fisher_sim0{sk}_noiseless/'
+    #prefix_out = f'data/testnorm_fisher_sim0{sk}_noise_yesnoisevar/'
+    #prefix_out = f'data/testnorm_minimizer_sim0{sk}_noise_yesnoisevar/'
+    prefix_out = f'data/2testnorm_minimizer_sim0{sk}_noiseless/'
+
+    print(prefix_out)
 
     if residuals:
         sname = 'residual'
         if masked:
-            fnames = glob.glob(f'{prefix_out}masked_residualmaps*.fits')
+            fnames = glob.glob(f'{prefix_out}masked_residualmaps*_split0.fits')
         else: 
             fnames = glob.glob(f'{prefix_out}full_residualmaps*.fits')
     else:
@@ -147,7 +157,7 @@ def saveps(sk):
             s_f.add_ell_cl(cl_type, n1, n2, leff, bpw_freq_sig[i1, i2, :], window=s_wins)
             s_n.add_ell_cl(cl_type, n1, n2, leff, bpw_freq_noi_re[i1, i2, :], window=s_wins)
 
-        # Add covariance
+        # Add covariance (Knox formula)
         cov_bpw = np.zeros([ncross, nbands, ncross, nbands])
         factor_modecount = 1./((2*leff+1)*dell*fsky)
         for ii, (i1, i2) in enumerate(zip(indices_tr[0], indices_tr[1])):
@@ -166,5 +176,5 @@ def saveps(sk):
     return 
 
 
-for k in range(4):
+for k in range(1): #range(4):
     saveps(k)
