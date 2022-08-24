@@ -10,16 +10,41 @@ import bfore.skymodel as sky
 import bfore.instrumentmodel as ins
 from bfore.sampling import clean_pixels, run_emcee, run_minimize, run_fisher
 
-masked = True
+from optparse import OptionParser
 
-nsims = 21
-#nsims = 1
+parser = OptionParser()
+parser.add_option('--fsky', dest='fsky', default=0.1, type=float,
+                  help='Set to define mask fsky')
+(o, args) = parser.parse_args()
+
+masked = True
+mask_lat = False
+mask_pysm = False #True
+mask_planck = False
+fsky = o.fsky
+
+nsims = 5 #21
 nside = 256
-fdir = '/mnt/extraspace/susanna/BBHybrid/'
+fdir = '/mnt/extraspace/susanna/BBSims/realistic/'
+#fdir = '/mnt/extraspace/susanna/BBSims/HensleyDraine/'
+#fdir = '/mnt/extraspace/susanna/BBSims/VanSyngel/'
+#fdir = '/mnt/extraspace/susanna/BBSims/CurvedPlaw/'
 
 if masked:
+    if mask_lat:
+        maskdir = '/mnt/zfsusers/susanna/BBSims/data/mask_apo_fsky%.1f.fits'%fsky
+    elif mask_pysm:
+        maskdir = '/mnt/zfsusers/susanna/BBSims/data/mask_pysm/mask_apo_pysmd0s0_fsky%.1f.fits'%fsky
+    elif mask_planck:
+        maskdir = '/mnt/zfsusers/susanna/BBSims/data/mask_plancktmp/mask_apo_plancktmp_fsky%.1f.fits'%fsky
+    else:
+        maskdir = 'mask_apodized.fits'
+    print()
+    print('Mask used:')
+    print(maskdir)
+    print()
     sname = 'masked'
-    sat_mask = hp.ud_grade(hp.read_map('mask_apodized.fits'), nside)
+    sat_mask = hp.ud_grade(hp.read_map(maskdir), nside)
 else:
     sname = 'full'
     sat_mask = np.ones(hp.nside2npix(nside))
@@ -56,6 +81,7 @@ def noivar(data):
     """
     nfreq, npix = data.shape
     nVar = np.std(data, axis=-1)**2
+    print(nVar.shape)
     nVar_inv = 1/nVar
     return nVar, nVar_inv
 
@@ -76,7 +102,7 @@ def coadd_maps(splits):
     coadd = (s0 + s1 + s2 + s3)/4
     return coadd
     
-def clean_maps(k, split, split_number, fn, sdir):
+def get_params(k, sdir):
     """ Generate the residual amplitudes in each observation split. 
 
     Args:
@@ -87,28 +113,34 @@ def clean_maps(k, split, split_number, fn, sdir):
       sn: output directory [str]
 
     Returns:
-      Saves the mixing matrix (Sbar) and Q matrix.
-      Saves the residual amplitude maps (filled maps)
+      Saves the maximum likelihood betas (params_cent), their sigmas (params_sigma),
+      mixing matrix (Sbar) and Q matrix.
     """
     testmap = coadd_maps(splits) #[N_freq, N_pix]
     Qs = testmap[::2, sat_mask>0]
     Us = testmap[1::2, sat_mask>0]
     skymaps = np.array([np.transpose(Qs), np.transpose(Us)]) #[N_pol,N_pix,N_freq]
 
-    # Noise covariance matrix, [N_freq, N_freq]
     Qn, Un, noise = get_noise(fn) 
     Qn_sigmas, Qninv_sigmas = noivar(Qn) #get inverse variance of noise
     Ninv = np.diag(Qninv_sigmas) #get diagonal matrix
-
+    
     nside = 256
-    nhits=hp.ud_grade(hp.read_map("./data/norm_nHits_SA_35FOV.fits", verbose=False), nside_out=nside)
+    if mask_pysm:
+        nhits = hp.ud_grade(hp.read_map(maskdir, verbose=False), nside_out=nside)
+    else:
+        nhits=hp.ud_grade(hp.read_map("./data/norm_nHits_SA_35FOV.fits", verbose=False), nside_out=nside)
+
     nhits[nhits < 1E-3] = 1E-3
     nhits = nhits[sat_mask > 0]
     ii = np.ones((2, len(nhits)))
     
     p = (np.array([ii / (nhits * sig) for sig in Qninv_sigmas]))
+
     Ninv_sp = np.transpose(p, axes=[1,2,0]) #npol, npix, nfreq
 
+    #array([-3.08336434,  1.62253067]) --> sync, dust
+    
     nu_ref_sync_p=23.
     beta_sync_fid=-3.
     curv_sync_fid=0.
@@ -142,29 +174,41 @@ def clean_maps(k, split, split_number, fn, sdir):
                    sky_true, 
                    instrument)
     sampler_args = {
-        "method" : 'Powell',
-        "tol" : None,
-        "callback" : None,
-        "options" : {'xtol':1E-4,'ftol':1E-4,'maxiter':None,'maxfev':None,'direc':None}
+        "ml_first" : True,
+        "ml_method" : 'Powell',
+        "ml_options" : {'xtol':1E-4,'ftol':1E-4,'maxiter':None,'maxfev':None,'direc':None}
         }
+    # Compute best fit spectral indices and sigmas
+    rdict = clean_pixels(ml, run_fisher, **sampler_args)
+    params_cent = rdict['params_cent'] #Params centre (beta_d, beta_s)
+    covar = np.linalg.inv(rdict['fisher_m'])
+    params_sigma = np.sqrt(np.diag(covar)) #Params sigma (priors)
 
-    # Compute best fit spectral indices
-    rdict = clean_pixels(ml, run_minimize, **sampler_args)
-    # Compute mixing matrix [n_components * n_freqs]
-    Sbar = ml.f_matrix(rdict['params_ML']).T #mixing matrix for ML parameters
-
-    # T matrix: [n_components * n_components]
-    # N matrix per pixel
-    # (S^T * N^-1 * S)
+    print(params_cent)
+    print(params_sigma)
+    
+    Sbar = ml.f_matrix(params_cent).T #mixing matrix for ML parameters [n_comp * n_freqs]
+    
     Sninv = np.linalg.inv((Sbar.T).dot(Ninv).dot(Sbar)) 
-    # 1 - P to select only CMB
     P = np.diag([1., 1., 0.])
-    # Filter
-    # in Q matrix use homogeneous Nvar
-    # non homogeneous Nvar factorises out
     Q = np.identity(6) - Sbar.dot(P).dot(Sninv).dot(Sbar.T).dot(Ninv)
 
-    # Residuals for each split
+    np.savez(f'{sdir}{sname}_hybrid_params_{k}', params_cent=params_cent, params_sigma=params_sigma, Sbar=Sbar, Q=Q)
+    return Q
+
+def clean_maps(k, split, split_number, fn, sdir, Q):
+    """ Generate the residual amplitudes in each observation split. 
+
+    Args:
+      k: simulation number [int]
+      split: observation split [str]
+      split_number: [int]
+      fn: directory containing the simulation [str]
+      sn: output directory [str]
+
+    Returns:
+      Saves the residual amplitude maps (filled maps)
+    """
     sp = hp.read_map(split, field=np.arange(12), verbose=False)
     Qsp = sp[::2, sat_mask>0]
     Usp = sp[1::2, sat_mask>0]
@@ -174,27 +218,54 @@ def clean_maps(k, split, split_number, fn, sdir):
     
     filled_maps = np.zeros((12, hp.nside2npix(nside))) 
     filled_maps[:, sat_mask>0] = reducedmaps
-
-    # Save the results 
-    np.savez(f'{sdir}{sname}_hybrid_params_{k}', params=rdict['params_ML'], Sbar=Sbar, Q=Q)
     hp.write_map(f'{sdir}{sname}_residualmaps_{k}_split%i.fits'%split_number, filled_maps, overwrite=True)
     return
 
-# only do one results save residuals and then apply to all the splits
-#stds = 4
-#for std in range(stds):
-#ddir = f'sim_ns256_stdd0.{std}_stds0.{std}_gdm3.0_gsm3.0_fullsky_E_B_nu0d353_nu0s23_cmb_dust_sync_Ad28.0_As1.6_ad0.16_as0.93/'
-#sdir = f'./data/sim0{std}/'
-ddir = f'sim_ns256_fullsky_E_B_cmb_dust_sync_PySMBetas_PySMAmps_d0s0_nu0d353_nu0s23/'
-sdir = f'./data/simd0s0/'
+# TO CHANGE
+#ddir = f'sim_ns256_fullsky_E_B_cmb_dust_sync_PySMBetas_PySMAmps_nu0d353_nu0s23/'
+#ddir = f'sim_ns256_fullsky_E_B_cmb_dust_sync_PySMBetas_PySMAmps_d1s1_nu0d353_nu0s23/'
+#ddir = f'sim_ns256_fullsky_B_cmb_dust_sync_PySMBetas_PySMAmps_d1s1_nu0d353_nu0s23/' #B only
+#ddir = f'sim_ns256_r0.01_fullsky_B_cmb_dust_sync_PySMBetas_PySMAmps_nu0d353_nu0s23/' #B only, r=0.01
+#ddir = f'sim_ns256_r0.01_whitenoiONLY_fullsky_B_cmb_dust_sync_PySMBetas_PySMAmps_nu0d353_nu0s23/' #B only, r=0.01, white_noi only
+#ddir = f'sim_ns256_whitenoiONLY_fullsky_B_cmb_dust_sync_PySMBetas_PySMAmps_nu0d353_nu0s23/' #B only, white_noi only
+#ddir = f'sim_ns256_msk_E_B_cmb_dust_sync_GNILCbetaD_PySMbetaS_GNILCampD_PySMampS_nu0d353_nu0s23/' # GNILC sims
+ddir = f'sim_ns256_fullsky_E_B_cmb_dust_sync_GNILCbetaD_PySMbetaS_PySMAmps_nu0d353_nu0s23/' # GNILC sims (beta_D only)
+
+if masked:
+    if mask_lat:
+        sdir = f'./data/simd1s1_masklat/fsky%.1f/'%fsky #f'./data/simd1s1/'
+    elif mask_pysm:
+        # TO CHANGE
+        #sdir = f'./data/simd1s1_maskpysm_Bonly/fsky%.1f/'%fsky
+        #sdir = f'./data/simd1s1_maskpysm_Bonly_r0.01/fsky%.1f/'%fsky
+        #sdir = f'./data/simd1s1_maskpysm_Bonly_r0.01_whitenoiONLY/fsky%.1f/'%fsky
+        sdir = f'./data/simd1s1_maskpysm_Bonly_whitenoiONLY/fsky%.1f/'%fsky
+    elif mask_planck:
+        sdir = f'./data/simd1s1_maskplanck_Bonly/fsky%.1f/'%fsky
+    else:
+        #sdir = f'./data/simd1s1/'
+        #sdir = f'./data/simHensleyDraine/'
+        #sdir = f'./data/simVanSyngel/'
+        #sdir = f'./data/simCurvedPlaw/'
+        #sdir = f'./data/simGNILC/'
+        sdir = f'./data/sim_GNILCbetaD_PySMAmps/'
+else:
+    #fsky=1.
+    #sdir = f'./data/simd1s1/fsky%.1f/'%fsky
+    sdir = f'./data/simd1s1_maskpysm_Bonly/fsky%.1f_fromfullmaps/'%fsky
+
+print()
+print('Output directory:')
+print(sdir)
+print()
 os.system('mkdir -p ' + sdir)
+
 fnames = glob.glob(f'{fdir}{ddir}s*/')
 fnames.sort()
+fnames = fnames[1:]
 for k, fn in enumerate(fnames[:nsims]):
     splits = glob.glob(f'{fn}obs_split*of4.fits.gz')
     splits.sort()
+    Q = get_params(str(k).zfill(4), sdir)
     for s, sn in enumerate(splits):
-        clean_maps(str(k).zfill(4), sn, s, fn, sdir)
-
-
-
+        clean_maps(str(k).zfill(4), sn, s, fn, sdir, Q)
