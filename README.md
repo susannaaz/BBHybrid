@@ -9,6 +9,7 @@ The outputs are directly compatible with the inputs to [BBPipe](https://github.c
 its submodule [BBPower](https://github.com/simonsobs/BBPower). 
 The inputs can be generated with [BBSims](https://github.com/susannaaz/BBSims).
 
-
 Ref:
 [A hybrid map-Cℓ  component separation method for primordial CMB B-mode searches](https://iopscience.iop.org/article/10.1088/1475-7516/2023/03/035)
+
+Developed by: Susanna Azzoni, Max Abitbol, David Alonso
