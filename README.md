@@ -6,5 +6,4 @@ that de-projects the linear combinations of the data that follow the best-fit SE
 foreground sources under consideration (dust and synchrotron).
 
 See:
-("A hybrid map-Cℓ  component separation method for
-primordial CMB B-mode searches")[https://github.com/susannaaz/BBHybrid]
+(A hybrid map-Cℓ  component separation method for primordial CMB B-mode searches)[https://iopscience.iop.org/article/10.1088/1475-7516/2023/03/035]
